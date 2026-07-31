@@ -1,0 +1,8 @@
+# Variables d'environnement / Clés secrètes
+.env
+
+# Cache Python et environnement local
+__pycache__/
+*.py[cod]
+.streamlit/secrets.toml
+.venv/
