@@ -171,11 +171,13 @@ elif st.session_state.page_actuelle == "👨‍🍳 Assistant IA":
             with st.spinner("Le Chef CookIA réfléchit... 🍳"):
                 try:
                     instruction_systeme = (
-                        "Tu es CookIA, un assistant cuisinier sympa pour un utilisateur vivant seul et très occupé. "
-                        f"INVENTAIRE DU FRIGO : {liste_frigo}. "
+                        "Tu es CookIA, un assistant cuisinier sympa, pragmatique et direct. "
+                        "Ton utilisateur est un étudiant et apprenti ingénieur très occupé qui vit seul. "
+                        f"INVENTAIRE DU GARDE-MANGER : {liste_frigo}. "
                         f"MENU DE LA SEMAINE EN COURS (MÉMOIRE) : {texte_menu_actuel}. "
-                        "CONTRAINTES MATÉRIELLES : L'utilisateur n'a PAS de four, ni de mixeur. 2 plaques de cuisson et un micro-ondes. "
-                        "CONTRAINTES DE TEMPS : Propose de cuire des bases en double (pâtes, riz, patates) pour les réutiliser le lendemain. "
+                        "CONTRAINTES MATÉRIELLES : L'utilisateur n'a PAS de four, ni de mixeur. Uniquement 2 plaques de cuisson et un micro-ondes. "
+                        "RYTHME ET HABITUDES : Tu gères UNIQUEMENT les menus du soir. L'utilisateur mange à la cantine le midi : les dîners n'ont donc pas toujours besoin d'être hyper consistants ni de contenir systématiquement de la viande. Ils doivent surtout être simples et rapides. "
+                        "GAIN DE TEMPS (BATCH COOKING) : Propose de cuire des bases en double (pâtes, riz, patates) pour les réutiliser le lendemain OU plus tard dans la semaine (par exemple, utiliser la base du lundi pour le repas du mercredi). "
                         "Si l'utilisateur te demande de l'aide pour cuisiner, base-toi sur le MENU DE LA SEMAINE EN COURS. "
                         "IMPORTANT : À la TOUTE FIN de ta réponse, si tu proposes un NOUVEAU menu, tu DOIS inclure un bloc JSON contenant strictement la liste des ingrédients manquants à acheter :\n"
                         "```json\n"
@@ -277,13 +279,15 @@ elif st.session_state.page_actuelle == "🛒 Courses":
                         prompt_filtre = f"""
                         Voici une liste d'articles que je viens d'acheter : {liste_text}.
                         1. Retire absolument tous les produits d'hygiène, d'entretien ou non comestibles (ex: dentifrice, sacs poubelle, savon).
-                        2. Garde UNIQUEMENT les produits alimentaires et déduis-en une quantité et une unité logique si elles ne sont pas précisées.
-                        3. Renvoie le résultat au format JSON strict, sans aucun texte autour, avec cette structure :
+                        2. EXCLUS tous les plats préparés (ex: pizza, plats micro-ondes, petits pains) et les snacks/friandises (ex: Snickers, chips, gâteaux).
+                        3. Garde STRICTEMENT les ingrédients bruts ou de base servant à cuisiner des repas (ex: légumes, viandes, riz, pâtes, crème, fromages, épices).
+                        4. Déduis-en une quantité et une unité logique si elles ne sont pas précisées.
+                        5. Renvoie le résultat au format JSON strict, sans aucun texte autour, avec cette structure :
                         [
                           {{"nom": "Pommes", "quantite": 4, "unite": "pièce(s)"}},
                           {{"nom": "Lait", "quantite": 1, "unite": "L"}}
                         ]
-                        S'il n'y a aucun produit alimentaire, renvoie [].
+                        S'il n'y a aucun produit alimentaire à cuisiner, renvoie [].
                         """
                         
                         reponse_ia = client.chats.create(model="gemini-3.6-flash").send_message(prompt_filtre)
