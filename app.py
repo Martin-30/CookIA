@@ -67,8 +67,8 @@ if "page_actuelle" not in st.session_state:
 with st.sidebar:
     st.header("Menu")
     
-    if st.button("📦 Inventaire", use_container_width=True, type="primary" if st.session_state.page_actuelle == "📦 Inventaire" else "secondary"):
-        st.session_state.page_actuelle = "📦 Inventaire"
+    if st.button("📦 Garde-Manger", use_container_width=True, type="primary" if st.session_state.page_actuelle == "📦 Garde-Manger" else "secondary"):
+        st.session_state.page_actuelle = "📦 Garde-Manger"
         st.rerun()
         
     if st.button("👨‍🍳 Assistant IA", use_container_width=True, type="primary" if st.session_state.page_actuelle == "👨‍🍳 Assistant IA" else "secondary"):
@@ -87,7 +87,7 @@ with st.sidebar:
 # ==========================================
 # PAGE 1 : INVENTAIRE
 # ==========================================
-if st.session_state.page_actuelle == "📦 Inventaire":
+if st.session_state.page_actuelle == "📦 Garde-Manger":
     st.subheader("Ajouter un ingrédient")
     with st.form("form_ajout", clear_on_submit=True):
         col1, col2, col3 = st.columns([2, 1, 1])
@@ -243,57 +243,90 @@ elif st.session_state.page_actuelle == "👨‍🍳 Assistant IA":
             st.rerun()
 
 # ==========================================
-# PAGE 3 : COURSES
+# PAGE 3 : RETOUR DE COURSES
 # ==========================================
 elif st.session_state.page_actuelle == "🛒 Courses":
-    st.subheader("🛒 Ma Liste de Courses")
+    st.subheader("🛒 Retour de Courses")
+    st.info("Coche tes articles directement dans l'application Google Tasks sur ton téléphone quand tu es au magasin. En rentrant, clique ici pour ranger tes achats !")
     
-    with st.form("form_ajout_course", clear_on_submit=True):
-        col1, col2, col3 = st.columns([2, 1, 1])
-        with col1:
-            nom_c = st.text_input("Article")
-        with col2:
-            qte_c = st.number_input("Qté", min_value=0.1, value=1.0, step=1.0) # step=1.0 ici aussi
-        with col3:
-            unite_c = st.selectbox("Unité", ["pièce(s)", "g", "kg", "ml", "L", "boîte(s)"], key="u_course")
-            
-        if st.form_submit_button("Ajouter à la liste"):
-            if nom_c.strip() != "":
-                supabase.table("liste_courses").insert({"nom": nom_c.capitalize(), "quantite": qte_c, "unite": unite_c}).execute()
-                st.rerun()
-
-    st.divider()
-    
-    try:
-        courses = supabase.table("liste_courses").select("*").order("created_at", desc=True).execute().data
-        if not courses:
-            st.info("Ta liste est vide !")
+    if st.button("🔄 Synchroniser mes achats depuis Google Tasks", type="primary", use_container_width=True):
+        service = get_tasks_service()
+        if not service:
+            st.error("⚠️ Impossible de se connecter à Google Tasks.")
         else:
-            for item in courses:
-                col_nom, col_qte, col_btn_buy, col_btn_del = st.columns([2, 1.2, 1.2, 0.6], vertical_alignment="center")
+            with st.spinner("Lecture de tes achats sur Google Tasks..."):
+                list_id = get_or_create_shopping_list(service, "Liste de course")
                 
-                with col_nom:
-                    st.markdown(f"**{item['nom']}** <br> *(en {item['unite']})*", unsafe_allow_html=True)
+                # Récupère toutes les tâches (y compris les terminées/cachées)
+                results = service.tasks().list(tasklist=list_id, showCompleted=True, showHidden=True).execute()
+                taches = results.get('items', [])
                 
-                with col_qte:
-                    nouvelle_qte = st.number_input("Qté finale", value=float(item['quantite']), step=1.0, key=f"edit_{item['id']}")
+                # On filtre manuellement pour ne garder que celles qui sont cochées
+                taches_terminees = [t['title'] for t in taches if t.get('status') == 'completed']
                 
-                with col_btn_buy:
-                    if st.button("✅", key=f"buy_{item['id']}", help="Acheté"):
-                        supabase.table("inventaire").insert({
-                            "nom": item['nom'],
-                            "quantite": nouvelle_qte, 
-                            "unite": item['unite']
-                        }).execute()
-                        supabase.table("liste_courses").delete().eq("id", item['id']).execute()
-                        st.rerun()
+            if not taches_terminees:
+                st.warning("Aucun article n'a été coché dans ta 'Liste de course'.")
+            else:
+                with st.spinner("Le Chef trie tes courses (et met la lessive de côté)... 🧠"):
+                    try:
+                        # 1. Le Prompt pour filtrer avec l'IA
+                        liste_text = ", ".join(taches_terminees)
+                        prompt_filtre = f"""
+                        Voici une liste d'articles que je viens d'acheter : {liste_text}.
+                        1. Retire absolument tous les produits d'hygiène, d'entretien ou non comestibles (ex: dentifrice, sacs poubelle, savon).
+                        2. Garde UNIQUEMENT les produits alimentaires et déduis-en une quantité et une unité logique si elles ne sont pas précisées.
+                        3. Renvoie le résultat au format JSON strict, sans aucun texte autour, avec cette structure :
+                        [
+                          {{"nom": "Pommes", "quantite": 4, "unite": "pièce(s)"}},
+                          {{"nom": "Lait", "quantite": 1, "unite": "L"}}
+                        ]
+                        S'il n'y a aucun produit alimentaire, renvoie [].
+                        """
                         
-                with col_btn_del:
-                    if st.button("❌", key=f"del_c_{item['id']}"):
-                        supabase.table("liste_courses").delete().eq("id", item['id']).execute()
-                        st.rerun()
-    except Exception as e:
-        st.error(f"Erreur : {e}")
+                        reponse_ia = client.chats.create(model="gemini-3.6-flash").send_message(prompt_filtre)
+                        texte_json = re.sub(r"```json\n.*?\n```", "", reponse_ia.text, flags=re.DOTALL) # Nettoyage si l'IA met des balises
+                        match = re.search(r'\[.*\]', reponse_ia.text, re.DOTALL)
+                        
+                        if match:
+                            articles_alimentaires = json.loads(match.group(0))
+                        else:
+                            articles_alimentaires = json.loads(reponse_ia.text) # Si le texte brut est déjà le JSON
+                        
+                        # 2. Insertion dans le Garde-Manger (Supabase)
+                        for article in articles_alimentaires:
+                            supabase.table("inventaire").insert({
+                                "nom": str(article.get("nom", "")).capitalize(),
+                                "quantite": float(article.get("quantite", 1.0)),
+                                "unite": str(article.get("unite", "pièce(s)"))
+                            }).execute()
+                            
+                        # 3. Nettoyage de Google Tasks (efface toutes les tâches terminées)
+                        service.tasks().clear(tasklist=list_id).execute()
+                        
+                        # 4. Affichage du résumé
+                        st.success("✅ Courses rangées avec succès et Google Tasks nettoyé !")
+                        st.write("**Ajouté au Garde-Manger :**")
+                        for art in articles_alimentaires:
+                            st.write(f"- {art['quantite']} {art['unite']} de {art['nom']}")
+                            
+                    except Exception as e:
+                        st.error(f"Erreur lors du traitement par l'IA : {e}")
+
+    # Ajout manuel de secours (au cas où on oublie de l'ajouter sur le téléphone)
+    st.divider()
+    st.write("Un oubli ? Ajoute un article manuellement :")
+    with st.form("form_ajout_secours", clear_on_submit=True):
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            nouvel_article = st.text_input("Article à ajouter à ta prochaine liste")
+        with col2:
+            submit = st.form_submit_button("Ajouter")
+            if submit and nouvel_article.strip():
+                service = get_tasks_service()
+                if service:
+                    list_id = get_or_create_shopping_list(service, "Liste de course")
+                    service.tasks().insert(tasklist=list_id, body={'title': nouvel_article.capitalize()}).execute()
+                    st.success("Ajouté à Google Tasks !")
 
 # ==========================================
 # PAGE 4 : MENU DE LA SEMAINE (NOUVEAU)
