@@ -17,8 +17,7 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 
 # Configuration de la page
 st.set_page_config(page_title="CookIA", page_icon="🍳", layout="centered")
-
-st.title("🍳 CookIA - Ton Assistant Cuistot")
+st.title("🍳 CookIA - Ton Assistant")
 
 @st.cache_resource
 def init_supabase() -> Client:
@@ -31,17 +30,17 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "courses_proposees" not in st.session_state:
     st.session_state.courses_proposees = []
+if "texte_proposition_ia" not in st.session_state:
+    st.session_state.texte_proposition_ia = ""
 if "page_actuelle" not in st.session_state:
-    st.session_state.page_actuelle = "👨‍🍳 Assistant IA" # Page par défaut à l'ouverture
+    st.session_state.page_actuelle = "👨‍🍳 Assistant IA"
 
 # ==========================================
-# MENU DE NAVIGATION (100% Natif, sans CSS)
+# MENU DE NAVIGATION
 # ==========================================
 with st.sidebar:
-    st.header("Menu") # J'ai retiré l'épingle !
+    st.header("Menu")
     
-    # Création des 3 boutons de navigation
-    # L'option 'type' permet de griser les boutons inactifs et de colorer le bouton actif
     if st.button("📦 Inventaire", use_container_width=True, type="primary" if st.session_state.page_actuelle == "📦 Inventaire" else "secondary"):
         st.session_state.page_actuelle = "📦 Inventaire"
         st.rerun()
@@ -54,6 +53,11 @@ with st.sidebar:
         st.session_state.page_actuelle = "🛒 Courses"
         st.rerun()
 
+    # NOUVEL ONGLET
+    if st.button("📅 Menu de la semaine", use_container_width=True, type="primary" if st.session_state.page_actuelle == "📅 Menu de la semaine" else "secondary"):
+        st.session_state.page_actuelle = "📅 Menu de la semaine"
+        st.rerun()
+
 # ==========================================
 # PAGE 1 : INVENTAIRE
 # ==========================================
@@ -64,7 +68,8 @@ if st.session_state.page_actuelle == "📦 Inventaire":
         with col1:
             nom = st.text_input("Nom", placeholder="ex: Tomates, Œufs...")
         with col2:
-            quantite = st.number_input("Qté", min_value=0.1, value=1.0, step=0.5)
+            # MODIFICATION : step=1.0 pour avancer de 1 en 1
+            quantite = st.number_input("Qté", min_value=0.1, value=1.0, step=1.0)
         with col3:
             unite = st.selectbox("Unité", ["pièce(s)", "g", "kg", "ml", "L", "boîte(s)"])
             
@@ -75,17 +80,17 @@ if st.session_state.page_actuelle == "📦 Inventaire":
                 st.rerun()
 
     st.divider()
-    
     st.subheader("Mon Frigo Actuel")
     try:
         aliments = supabase.table("inventaire").select("*").order("created_at", desc=True).execute().data
         if not aliments:
-            st.info("Ton inventaire est vide. Commence à ajouter tes courses !")
+            st.info("Ton inventaire est vide.")
         else:
             for item in aliments:
-                col_texte, col_bouton = st.columns([4, 1])
+                # MODIFICATION : Ratio de colonnes optimisé pour mobile et alignement vertical
+                col_texte, col_bouton = st.columns([0.85, 0.15], vertical_alignment="center")
                 with col_texte:
-                    st.markdown(f"- **{item['nom']}** : {item['quantite']} {item['unite']}")
+                    st.markdown(f"**{item['nom']}** : {item['quantite']} {item['unite']}")
                 with col_bouton:
                     if st.button("❌", key=f"del_inv_{item['id']}"):
                         supabase.table("inventaire").delete().eq("id", item['id']).execute()
@@ -99,11 +104,19 @@ if st.session_state.page_actuelle == "📦 Inventaire":
 elif st.session_state.page_actuelle == "👨‍🍳 Assistant IA":
     st.subheader("👨‍🍳 Ton Chef Cuistot Virtuel")
     
+    # 1. Lecture de l'inventaire
     try:
         aliments = supabase.table("inventaire").select("*").execute().data
         liste_frigo = ", ".join([f"{item['quantite']} {item['unite']} de {item['nom']}" for item in aliments]) if aliments else "Le frigo est vide."
     except:
         liste_frigo = "Erreur de lecture du frigo."
+
+    # 2. Lecture du menu en cours (La mémoire de l'IA)
+    try:
+        menu_actif = supabase.table("menu_semaine").select("*").order("created_at", desc=True).limit(1).execute().data
+        texte_menu_actuel = menu_actif[0]['contenu'] if menu_actif else "Aucun menu n'est actuellement prévu ou validé."
+    except:
+        texte_menu_actuel = "Erreur de lecture du menu."
 
     def interroger_ia(prompt_utilisateur):
         st.session_state.messages.append({"role": "user", "content": prompt_utilisateur})
@@ -113,25 +126,23 @@ elif st.session_state.page_actuelle == "👨‍🍳 Assistant IA":
         with st.chat_message("assistant"):
             message_placeholder = st.empty()
             
-            with st.spinner("Le Chef CookIA réfléchit à ton menu... 🍳"):
+            with st.spinner("Le Chef CookIA réfléchit... 🍳"):
                 try:
+                    # INJECTION DE LA MÉMOIRE DANS LE PROMPT
                     instruction_systeme = (
                         "Tu es CookIA, un assistant cuisinier sympa pour un utilisateur vivant seul et très occupé. "
-                        f"Voici l'inventaire actuel du frigo : {liste_frigo}. "
-                        "CONTRAINTES MATÉRIELLES : L'utilisateur n'a PAS de four, ni de mixeur. Il cuisine uniquement avec 2 plaques de cuisson et un micro-ondes. "
-                        "CONTRAINTES DE TEMPS : Il ne veut pas cuisiner 30 minutes chaque jour. "
-                        "Tu DOIS privilégier la préparation de grandes portions et la réutilisation d'ingrédients de base "
-                        "(ex: cuire des pâtes ou du riz le lundi pour les utiliser dans une salade rapide ou les poêler le jeudi). "
-                        "GESTION DU GASPILLAGE : Il est tout à fait normal et acceptable qu'il reste des ingrédients non-périssables (comme les pâtes, le riz, les conserves) à la fin de la semaine, ne force pas leur consommation totale. En revanche, tu dois construire le menu de manière à utiliser en priorité absolue les ingrédients frais pour qu'ils ne pourrissent pas. "
-                        "Propose des repas simples et liste les ingrédients manquants. "
-                        "IMPORTANT : À la TOUTE FIN de ta réponse, tu DOIS inclure un bloc JSON contenant strictement la liste des ingrédients manquants à acheter, "
-                        "sous ce format exact et sans rien écrire d'autre après :\n"
+                        f"INVENTAIRE DU FRIGO : {liste_frigo}. "
+                        f"MENU DE LA SEMAINE EN COURS (MÉMOIRE) : {texte_menu_actuel}. "
+                        "CONTRAINTES MATÉRIELLES : L'utilisateur n'a PAS de four, ni de mixeur. 2 plaques de cuisson et un micro-ondes. "
+                        "CONTRAINTES DE TEMPS : Propose de cuire des bases en double (pâtes, riz, patates) pour les réutiliser le lendemain. "
+                        "Si l'utilisateur te demande de l'aide pour cuisiner, base-toi sur le MENU DE LA SEMAINE EN COURS. "
+                        "IMPORTANT : À la TOUTE FIN de ta réponse, si tu proposes un NOUVEAU menu, tu DOIS inclure un bloc JSON contenant strictement la liste des ingrédients manquants à acheter :\n"
                         "```json\n"
                         "[\n"
                         "  {\"nom\": \"Tomates\", \"quantite\": 4, \"unite\": \"pièce(s)\"}\n"
                         "]\n"
                         "```\n"
-                        "S'il ne manque rien, renvoie un tableau vide `[]`."
+                        "S'il ne manque rien ou si on discute juste cuisine, renvoie un tableau vide `[]`."
                     )
                     
                     historique_gemini = [types.Content(role="user" if m["role"] == "user" else "model", parts=[types.Part.from_text(text=m["content"])]) for m in st.session_state.messages[:-1]]
@@ -152,35 +163,45 @@ elif st.session_state.page_actuelle == "👨‍🍳 Assistant IA":
                     match_json = re.search(r"```json\n(.*?)\n```", texte_reponse, re.DOTALL)
                     if match_json:
                         st.session_state.courses_proposees = json.loads(match_json.group(1))
+                        st.session_state.texte_proposition_ia = texte_propre # On garde le texte de la recette en mémoire
 
                 except Exception as e:
                     message_placeholder.error(f"❌ Erreur : {e}")
 
-    if st.button("🪄 Générer 4 repas rapides (Lundi - Jeudi)"):
-        interroger_ia("Génère un menu de 4 repas simples pour la semaine (du lundi au jeudi). Prends en compte mes contraintes de temps, de matériel et de conservation.")
+    if st.button("🪄 Générer un nouveau menu (Lundi - Jeudi)"):
+        st.session_state.messages = [] # On vide le chat pour repartir au propre
+        interroger_ia("Génère un menu de 4 repas simples pour la semaine (du lundi au jeudi). Prends en compte mes contraintes.")
 
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    if prompt := st.chat_input("Ex: J'aimerais utiliser mes œufs ce soir..."):
+    if prompt := st.chat_input("Ex: Je lance le repas de ce soir, rappelle-moi quoi faire !"):
         interroger_ia(prompt)
 
     if st.session_state.courses_proposees:
         st.divider()
-        st.warning("🛒 **L'IA te propose d'ajouter ces ingrédients à ta liste :**")
+        st.warning("🛒 **L'IA te propose ce menu et ces courses :**")
         for ing in st.session_state.courses_proposees:
             st.markdown(f"- {ing['quantite']} {ing['unite']} de {ing['nom']}")
         
-        if st.button("✅ Valider le menu et envoyer dans la Liste de Courses"):
+        if st.button("✅ Valider le menu, sauvegarder les recettes et envoyer aux Courses"):
+            # 1. Envoi à la liste de courses
             for ing in st.session_state.courses_proposees:
                 supabase.table("liste_courses").insert({
                     "nom": str(ing.get("nom", "")).capitalize(),
                     "quantite": float(ing.get("quantite", 1)),
                     "unite": str(ing.get("unite", "pièce(s)"))
                 }).execute()
+            
+            # 2. Sauvegarde du texte de l'IA dans la base de données (Mémoire)
+            supabase.table("menu_semaine").insert({
+                "contenu": st.session_state.texte_proposition_ia
+            }).execute()
+
             st.session_state.courses_proposees = [] 
-            st.success("Liste validée ! Va voir l'onglet Courses.")
+            st.session_state.texte_proposition_ia = ""
+            st.success("Menu validé ! Il est désormais dans l'onglet 'Menu de la semaine'.")
             st.rerun()
 
 # ==========================================
@@ -194,7 +215,7 @@ elif st.session_state.page_actuelle == "🛒 Courses":
         with col1:
             nom_c = st.text_input("Article")
         with col2:
-            qte_c = st.number_input("Qté", min_value=0.1, value=1.0, step=0.5)
+            qte_c = st.number_input("Qté", min_value=0.1, value=1.0, step=1.0) # step=1.0 ici aussi
         with col3:
             unite_c = st.selectbox("Unité", ["pièce(s)", "g", "kg", "ml", "L", "boîte(s)"], key="u_course")
             
@@ -211,17 +232,16 @@ elif st.session_state.page_actuelle == "🛒 Courses":
             st.info("Ta liste est vide !")
         else:
             for item in courses:
-                col_nom, col_qte, col_btn_buy, col_btn_del = st.columns([2, 1.2, 1.2, 0.6])
+                col_nom, col_qte, col_btn_buy, col_btn_del = st.columns([2, 1.2, 1.2, 0.6], vertical_alignment="center")
                 
                 with col_nom:
                     st.markdown(f"**{item['nom']}** <br> *(en {item['unite']})*", unsafe_allow_html=True)
                 
                 with col_qte:
-                    nouvelle_qte = st.number_input("Qté finale", value=float(item['quantite']), step=0.5, key=f"edit_{item['id']}")
+                    nouvelle_qte = st.number_input("Qté finale", value=float(item['quantite']), step=1.0, key=f"edit_{item['id']}")
                 
                 with col_btn_buy:
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    if st.button("✅ Acheté", key=f"buy_{item['id']}"):
+                    if st.button("✅", key=f"buy_{item['id']}", help="Acheté"):
                         supabase.table("inventaire").insert({
                             "nom": item['nom'],
                             "quantite": nouvelle_qte, 
@@ -231,9 +251,35 @@ elif st.session_state.page_actuelle == "🛒 Courses":
                         st.rerun()
                         
                 with col_btn_del:
-                    st.markdown("<br>", unsafe_allow_html=True)
                     if st.button("❌", key=f"del_c_{item['id']}"):
                         supabase.table("liste_courses").delete().eq("id", item['id']).execute()
                         st.rerun()
     except Exception as e:
         st.error(f"Erreur : {e}")
+
+# ==========================================
+# PAGE 4 : MENU DE LA SEMAINE (NOUVEAU)
+# ==========================================
+elif st.session_state.page_actuelle == "📅 Menu de la semaine":
+    st.subheader("📅 Tes Recettes Prévues")
+    st.info("Voici le menu que tu as validé. L'IA s'en souvient : tu peux aller dans l'Assistant et lui demander des conseils pour préparer ces plats !")
+    
+    try:
+        menus = supabase.table("menu_semaine").select("*").order("created_at", desc=True).execute().data
+        if not menus:
+            st.success("Aucun menu en cours. Demande à l'IA de t'en générer un !")
+        else:
+            # On affiche uniquement le dernier menu généré
+            menu_actuel = menus[0]
+            st.markdown(menu_actuel['contenu'])
+            
+            st.divider()
+            if st.button("🗑️ Semaine terminée : Effacer ce menu", type="primary"):
+                # On nettoie la base de données
+                supabase.table("menu_semaine").delete().eq("id", menu_actuel['id']).execute()
+                # On vide aussi l'historique du chat pour repartir à zéro
+                st.session_state.messages = []
+                st.success("Menu archivé ! Tu peux en générer un nouveau.")
+                st.rerun()
+    except Exception as e:
+        st.error(f"Erreur de lecture du menu : {e}")
