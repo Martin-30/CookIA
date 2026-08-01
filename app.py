@@ -261,8 +261,8 @@ elif st.session_state.page_actuelle == "🛒 Courses":
                 results = service.tasks().list(tasklist=list_id, showCompleted=True, showHidden=True).execute()
                 taches = results.get('items', [])
                 
-                # On filtre manuellement pour ne garder que celles qui sont cochées
-                taches_terminees = [t['title'] for t in taches if t.get('status') == 'completed']
+                # MODIFICATION ICI : On garde l'objet entier pour conserver le fameux "id"
+                taches_terminees = [t for t in taches if t.get('status') == 'completed']
                 
             if not taches_terminees:
                 st.warning("Aucun article n'a été coché dans ta 'Liste de course'.")
@@ -270,7 +270,10 @@ elif st.session_state.page_actuelle == "🛒 Courses":
                 with st.spinner("Le Chef trie tes courses (et met la lessive de côté)... 🧠"):
                     try:
                         # 1. Le Prompt pour filtrer avec l'IA
-                        liste_text = ", ".join(taches_terminees)
+                        # On extrait juste les titres pour parler à Gemini
+                        titres_taches = [t['title'] for t in taches_terminees]
+                        liste_text = ", ".join(titres_taches)
+                        
                         prompt_filtre = f"""
                         Voici une liste d'articles que je viens d'acheter : {liste_text}.
                         1. Retire absolument tous les produits d'hygiène, d'entretien ou non comestibles (ex: dentifrice, sacs poubelle, savon).
@@ -284,13 +287,12 @@ elif st.session_state.page_actuelle == "🛒 Courses":
                         """
                         
                         reponse_ia = client.chats.create(model="gemini-3.6-flash").send_message(prompt_filtre)
-                        texte_json = re.sub(r"```json\n.*?\n```", "", reponse_ia.text, flags=re.DOTALL) # Nettoyage si l'IA met des balises
                         match = re.search(r'\[.*\]', reponse_ia.text, re.DOTALL)
                         
                         if match:
                             articles_alimentaires = json.loads(match.group(0))
                         else:
-                            articles_alimentaires = json.loads(reponse_ia.text) # Si le texte brut est déjà le JSON
+                            articles_alimentaires = json.loads(reponse_ia.text)
                         
                         # 2. Insertion dans le Garde-Manger (Supabase)
                         for article in articles_alimentaires:
@@ -300,8 +302,9 @@ elif st.session_state.page_actuelle == "🛒 Courses":
                                 "unite": str(article.get("unite", "pièce(s)"))
                             }).execute()
                             
-                        # 3. Nettoyage de Google Tasks (efface toutes les tâches terminées)
-                        service.tasks().clear(tasklist=list_id).execute()
+                        # 3. MODIFICATION ICI : Nettoyage chirurgical de Google Tasks
+                        for tache in taches_terminees:
+                            service.tasks().delete(tasklist=list_id, task=tache['id']).execute()
                         
                         # 4. Affichage du résumé
                         st.success("✅ Courses rangées avec succès et Google Tasks nettoyé !")
@@ -312,7 +315,7 @@ elif st.session_state.page_actuelle == "🛒 Courses":
                     except Exception as e:
                         st.error(f"Erreur lors du traitement par l'IA : {e}")
 
-    # Ajout manuel de secours (au cas où on oublie de l'ajouter sur le téléphone)
+    # Ajout manuel de secours
     st.divider()
     st.write("Un oubli ? Ajoute un article manuellement :")
     with st.form("form_ajout_secours", clear_on_submit=True):
