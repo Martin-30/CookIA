@@ -6,6 +6,8 @@ from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 from supabase import create_client, Client
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
 
 # 1. Chargement et Connexion
 load_dotenv()
@@ -24,6 +26,30 @@ def init_supabase() -> Client:
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 supabase = init_supabase()
+
+def get_tasks_service():
+    """Initialise la connexion à Google Tasks de manière sécurisée."""
+    try:
+        # On lit le token depuis les secrets de Streamlit ou le .env local
+        token_str = st.secrets.get("GOOGLE_TASKS_TOKEN") or os.getenv("GOOGLE_TASKS_TOKEN")
+        if token_str:
+            creds_data = json.loads(token_str)
+            creds = Credentials.from_authorized_user_info(creds_data)
+            return build('tasks', 'v1', credentials=creds)
+    except Exception as e:
+        st.error(f"Problème de connexion à Google Tasks : {e}")
+    return None
+
+def get_or_create_shopping_list(service, list_name="Liste de course"):
+    """Cherche la liste exacte ou la crée si elle n'existe pas."""
+    results = service.tasklists().list().execute()
+    items = results.get('items', [])
+    for task_list in items:
+        if task_list['title'] == list_name:
+            return task_list['id']
+    # Si la liste n'existe pas encore sur ton compte Google, on la crée
+    new_list = service.tasklists().insert(body={'title': list_name}).execute()
+    return new_list['id']
 
 # 2. Initialisation des mémoires
 if "messages" not in st.session_state:
@@ -104,31 +130,46 @@ if st.session_state.page_actuelle == "📦 Inventaire":
 elif st.session_state.page_actuelle == "👨‍🍳 Assistant IA":
     st.subheader("👨‍🍳 Ton Chef Cuistot Virtuel")
     
-    # 1. Lecture de l'inventaire
+    # Lecture de l'inventaire et du menu (inchangé)
     try:
         aliments = supabase.table("inventaire").select("*").execute().data
         liste_frigo = ", ".join([f"{item['quantite']} {item['unite']} de {item['nom']}" for item in aliments]) if aliments else "Le frigo est vide."
     except:
         liste_frigo = "Erreur de lecture du frigo."
 
-    # 2. Lecture du menu en cours (La mémoire de l'IA)
     try:
         menu_actif = supabase.table("menu_semaine").select("*").order("created_at", desc=True).limit(1).execute().data
         texte_menu_actuel = menu_actif[0]['contenu'] if menu_actif else "Aucun menu n'est actuellement prévu ou validé."
     except:
         texte_menu_actuel = "Erreur de lecture du menu."
 
-    def interroger_ia(prompt_utilisateur):
+    # 1. B我們TON DE GÉNÉRATION
+    if st.button("🪄 Générer un nouveau menu (Lundi - Jeudi)"):
+        st.session_state.messages = [] # On vide l'historique proprement
+        st.session_state.prompt_en_attente = "Génère un menu de 4 repas simples pour la semaine (du lundi au jeudi). Prends en compte mes contraintes."
+        st.rerun()
+
+    # 2. BARRE DE CHAT
+    if prompt := st.chat_input("Ex: Je lance le repas de ce soir, rappelle-moi quoi faire !"):
+        st.session_state.prompt_en_attente = prompt
+        st.rerun()
+
+    # 3. AFFICHAGE DE L'HISTORIQUE (Une seule fois !)
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    # 4. GESTION DE LA RÉFLEXION DE L'IA
+    if "prompt_en_attente" in st.session_state and st.session_state.prompt_en_attente:
+        prompt_utilisateur = st.session_state.prompt_en_attente
         st.session_state.messages.append({"role": "user", "content": prompt_utilisateur})
+        
         with st.chat_message("user"):
             st.markdown(prompt_utilisateur)
-        
-        with st.chat_message("assistant"):
-            message_placeholder = st.empty()
             
+        with st.chat_message("assistant"):
             with st.spinner("Le Chef CookIA réfléchit... 🍳"):
                 try:
-                    # INJECTION DE LA MÉMOIRE DANS LE PROMPT
                     instruction_systeme = (
                         "Tu es CookIA, un assistant cuisinier sympa pour un utilisateur vivant seul et très occupé. "
                         f"INVENTAIRE DU FRIGO : {liste_frigo}. "
@@ -155,45 +196,42 @@ elif st.session_state.page_actuelle == "👨‍🍳 Assistant IA":
                     
                     reponse = chat.send_message(prompt_utilisateur)
                     texte_reponse = reponse.text
-                    
                     texte_propre = re.sub(r"```json\n.*?\n```", "", texte_reponse, flags=re.DOTALL).strip()
-                    message_placeholder.markdown(texte_propre)
+                    
+                    # Enregistrement dans la mémoire
                     st.session_state.messages.append({"role": "assistant", "content": texte_propre})
-
                     match_json = re.search(r"```json\n(.*?)\n```", texte_reponse, re.DOTALL)
                     if match_json:
                         st.session_state.courses_proposees = json.loads(match_json.group(1))
-                        st.session_state.texte_proposition_ia = texte_propre # On garde le texte de la recette en mémoire
+                        st.session_state.texte_proposition_ia = texte_propre
 
+                    # On vide le prompt en attente et on recharge la page pour tout afficher proprement
+                    st.session_state.prompt_en_attente = None
+                    st.rerun()
+                    
                 except Exception as e:
-                    message_placeholder.error(f"❌ Erreur : {e}")
+                    st.error(f"❌ Erreur : {e}")
+                    st.session_state.prompt_en_attente = None
 
-    if st.button("🪄 Générer un nouveau menu (Lundi - Jeudi)"):
-        st.session_state.messages = [] # On vide le chat pour repartir au propre
-        interroger_ia("Génère un menu de 4 repas simples pour la semaine (du lundi au jeudi). Prends en compte mes contraintes.")
-
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-
-    if prompt := st.chat_input("Ex: Je lance le repas de ce soir, rappelle-moi quoi faire !"):
-        interroger_ia(prompt)
-
+    # 5. BLOC DE VALIDATION DES COURSES
     if st.session_state.courses_proposees:
         st.divider()
         st.warning("🛒 **L'IA te propose ce menu et ces courses :**")
         for ing in st.session_state.courses_proposees:
             st.markdown(f"- {ing['quantite']} {ing['unite']} de {ing['nom']}")
         
-        if st.button("✅ Valider le menu, sauvegarder les recettes et envoyer aux Courses"):
-            # 1. Envoi à la liste de courses
-            for ing in st.session_state.courses_proposees:
-                supabase.table("liste_courses").insert({
-                    "nom": str(ing.get("nom", "")).capitalize(),
-                    "quantite": float(ing.get("quantite", 1)),
-                    "unite": str(ing.get("unite", "pièce(s)"))
-                }).execute()
-            
+        if st.button("✅ Valider le menu, sauvegarder et envoyer à Google Tasks"):
+            # 1. Envoi à Google Tasks
+            service = get_tasks_service()
+            if service:
+                with st.spinner("Synchronisation avec Google Tasks... 📱"):
+                    list_id = get_or_create_shopping_list(service, "Liste de course")
+                    for ing in st.session_state.courses_proposees:
+                        titre_task = f"{ing['quantite']} {ing['unite']} de {ing['nom'].capitalize()}"
+                        service.tasks().insert(tasklist=list_id, body={'title': titre_task}).execute()
+            else:
+                st.warning("⚠️ Google Tasks non connecté. Sauvegarde locale uniquement.")
+
             # 2. Sauvegarde du texte de l'IA dans la base de données (Mémoire)
             supabase.table("menu_semaine").insert({
                 "contenu": st.session_state.texte_proposition_ia
@@ -201,7 +239,7 @@ elif st.session_state.page_actuelle == "👨‍🍳 Assistant IA":
 
             st.session_state.courses_proposees = [] 
             st.session_state.texte_proposition_ia = ""
-            st.success("Menu validé ! Il est désormais dans l'onglet 'Menu de la semaine'.")
+            st.success("Menu validé ! Tes courses sont dans l'appli Google Tasks sur ton téléphone.")
             st.rerun()
 
 # ==========================================
