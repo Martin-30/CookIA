@@ -209,7 +209,9 @@ elif st.session_state.page_actuelle == "👨‍🍳 Assistant IA":
                     st.session_state.messages.append({"role": "assistant", "content": texte_propre})
                     match_json = re.search(r"```json\n(.*?)\n```", texte_reponse, re.DOTALL)
                     if match_json:
-                        st.session_state.courses_proposees = json.loads(match_json.group(1))
+                        data_extraite = json.loads(match_json.group(1))
+                        # On cible spécifiquement la liste contenue dans "courses"
+                        st.session_state.courses_proposees = data_extraite.get("courses", [])
                         st.session_state.texte_proposition_ia = texte_propre
 
                     # On vide le prompt en attente et on recharge la page pour tout afficher proprement
