@@ -248,9 +248,16 @@ elif st.session_state.page_actuelle == "👨‍🍳 Assistant IA":
 
             # 3. Extraction et sauvegarde des repas pour le déstockage
             try:
-                match_recettes = re.search(r'\{\s*"recettes"\s*:\s*\[.*?\]\s*\}', st.session_state.texte_proposition_ia, re.DOTALL)
-                if match_recettes:
-                    data_recettes = json.loads(match_recettes.group(0)).get("recettes", [])
+                # On cherche TOUS les blocs JSON renvoyés par l'IA (beaucoup plus robuste)
+                matches_json = re.finditer(r"```json\n(.*?)\n```", st.session_state.texte_proposition_ia, re.DOTALL)
+                
+                data_recettes = []
+                for match in matches_json:
+                    bloc = json.loads(match.group(1))
+                    if "recettes" in bloc:
+                        data_recettes = bloc["recettes"]
+                
+                if data_recettes:
                     # On vide l'ancien programme
                     supabase.table("programme_repas").delete().neq("id", 0).execute()
                     
@@ -261,7 +268,7 @@ elif st.session_state.page_actuelle == "👨‍🍳 Assistant IA":
                             "fait": False
                         }).execute()
             except Exception as e:
-                st.warning(f"Erreur lors de l'enregistrement des repas dynamiques : {e}")
+                st.warning(f"Erreur lors de l'enregistrement des repas : {e}")
 
             st.session_state.courses_proposees = [] 
             st.session_state.texte_proposition_ia = ""
