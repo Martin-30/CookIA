@@ -102,11 +102,11 @@ if st.session_state.page_actuelle == "📦 Garde-Manger":
         if st.form_submit_button("Ajouter"):
             if nom.strip() != "":
                 supabase.table("inventaire").insert({"nom": nom.capitalize(), "quantite": quantite, "unite": unite}).execute()
-                st.success(f"{nom.capitalize()} ajouté au frigo !")
+                st.success(f"{nom.capitalize()} ajouté au garde-manger !")
                 st.rerun()
 
     st.divider()
-    st.subheader("Mon Frigo Actuel")
+    st.subheader("Mon Garde-Manger Actuel")
     try:
         aliments = supabase.table("inventaire").select("*").order("created_at", desc=True).execute().data
         if not aliments:
@@ -133,9 +133,9 @@ elif st.session_state.page_actuelle == "👨‍🍳 Assistant IA":
     # Lecture de l'inventaire et du menu (inchangé)
     try:
         aliments = supabase.table("inventaire").select("*").execute().data
-        liste_frigo = ", ".join([f"{item['quantite']} {item['unite']} de {item['nom']}" for item in aliments]) if aliments else "Le frigo est vide."
+        liste_frigo = ", ".join([f"{item['quantite']} {item['unite']} de {item['nom']}" for item in aliments]) if aliments else "Le garde-manger est vide."
     except:
-        liste_frigo = "Erreur de lecture du frigo."
+        liste_frigo = "Erreur de lecture du grade-manger."
 
     try:
         menu_actif = supabase.table("menu_semaine").select("*").order("created_at", desc=True).limit(1).execute().data
@@ -177,15 +177,20 @@ elif st.session_state.page_actuelle == "👨‍🍳 Assistant IA":
                         f"MENU DE LA SEMAINE EN COURS (MÉMOIRE) : {texte_menu_actuel}. "
                         "CONTRAINTES MATÉRIELLES : L'utilisateur n'a PAS de four, ni de mixeur. Uniquement 2 plaques de cuisson et un micro-ondes. "
                         "RYTHME ET HABITUDES : Tu gères UNIQUEMENT les menus du soir. L'utilisateur mange à la cantine le midi : les dîners n'ont donc pas toujours besoin d'être hyper consistants ni de contenir systématiquement de la viande. Ils doivent surtout être simples et rapides. "
-                        "GAIN DE TEMPS (BATCH COOKING) : Propose de cuire des bases en double (pâtes, riz, patates) pour les réutiliser le lendemain OU plus tard dans la semaine (par exemple, utiliser la base du lundi pour le repas du mercredi). "
+                        "GAIN DE TEMPS (BATCH COOKING) : Propose de cuire des bases en double (pâtes, riz, patates) pour les réutiliser le lendemain OU plus tard dans la semaine. "
                         "Si l'utilisateur te demande de l'aide pour cuisiner, base-toi sur le MENU DE LA SEMAINE EN COURS. "
-                        "IMPORTANT : À la TOUTE FIN de ta réponse, si tu proposes un NOUVEAU menu, tu DOIS inclure un bloc JSON contenant strictement la liste des ingrédients manquants à acheter :\n"
+                        "IMPORTANT : À la TOUTE FIN de ta réponse, si tu proposes un NOUVEAU menu, tu DOIS inclure DEUX blocs JSON distincts :\n"
+                        "1. Le premier bloc pour les courses manquantes :\n"
                         "```json\n"
-                        "[\n"
-                        "  {\"nom\": \"Tomates\", \"quantite\": 4, \"unite\": \"pièce(s)\"}\n"
-                        "]\n"
+                        "{\"courses\": [{\"nom\": \"Tomates\", \"quantite\": 4, \"unite\": \"pièce(s)\"}]}\n"
                         "```\n"
-                        "S'il ne manque rien ou si on discute juste cuisine, renvoie un tableau vide `[]`."
+                        "2. Le deuxième bloc pour la consommation du Garde-Manger plat par plat (EXCLUS le sel, poivre, huile, épices de ce déstockage) :\n"
+                        "```json\n"
+                        "{\"recettes\": [\n"
+                        "  {\"titre\": \"Spaghettis Bolognaise\", \"consommation\": [{\"nom\": \"Pâtes\", \"quantite\": 250, \"unite\": \"g\"}, {\"nom\": \"Steak haché\", \"quantite\": 1, \"unite\": \"pièce(s)\"}]}\n"
+                        "]}\n"
+                        "```\n"
+                        "S'il ne s'agit pas d'un nouveau menu complet, renvoie `{\"courses\": []}` et `{\"recettes\": []}`."
                     )
                     
                     historique_gemini = [types.Content(role="user" if m["role"] == "user" else "model", parts=[types.Part.from_text(text=m["content"])]) for m in st.session_state.messages[:-1]]
@@ -234,14 +239,31 @@ elif st.session_state.page_actuelle == "👨‍🍳 Assistant IA":
             else:
                 st.warning("⚠️ Google Tasks non connecté. Sauvegarde locale uniquement.")
 
-            # 2. Sauvegarde du texte de l'IA dans la base de données (Mémoire)
+            # 2. Sauvegarde du texte global
             supabase.table("menu_semaine").insert({
                 "contenu": st.session_state.texte_proposition_ia
             }).execute()
 
+            # 3. Extraction et sauvegarde des repas pour le déstockage
+            try:
+                match_recettes = re.search(r'\{\s*"recettes"\s*:\s*\[.*?\]\s*\}', st.session_state.texte_proposition_ia, re.DOTALL)
+                if match_recettes:
+                    data_recettes = json.loads(match_recettes.group(0)).get("recettes", [])
+                    # On vide l'ancien programme
+                    supabase.table("programme_repas").delete().neq("id", 0).execute()
+                    
+                    for r in data_recettes:
+                        supabase.table("programme_repas").insert({
+                            "titre": r.get("titre", "Plat sans nom"),
+                            "ingredients_consommes": json.dumps(r.get("consommation", [])),
+                            "fait": False
+                        }).execute()
+            except Exception as e:
+                st.warning(f"Erreur lors de l'enregistrement des repas dynamiques : {e}")
+
             st.session_state.courses_proposees = [] 
             st.session_state.texte_proposition_ia = ""
-            st.success("Menu validé ! Tes courses sont dans l'appli Google Tasks sur ton téléphone.")
+            st.success("Menu validé ! Tes courses sont dans Google Tasks et tes repas planifiés.")
             st.rerun()
 
 # ==========================================
@@ -336,28 +358,53 @@ elif st.session_state.page_actuelle == "🛒 Courses":
                     st.success("Ajouté à Google Tasks !")
 
 # ==========================================
-# PAGE 4 : MENU DE LA SEMAINE (NOUVEAU)
+# PAGE 4 : MENU DE LA SEMAINE
 # ==========================================
-elif st.session_state.page_actuelle == "📅 Menu de la semaine":
-    st.subheader("📅 Tes Recettes Prévues")
-    st.info("Voici le menu que tu as validé. L'IA s'en souvient : tu peux aller dans l'Assistant et lui demander des conseils pour préparer ces plats !")
+elif st.session_state.page_actuelle == "📅 Menu":
+    st.subheader("📅 Programme & Validation des Repas")
     
-    try:
-        menus = supabase.table("menu_semaine").select("*").order("created_at", desc=True).execute().data
-        if not menus:
-            st.success("Aucun menu en cours. Demande à l'IA de t'en générer un !")
-        else:
-            # On affiche uniquement le dernier menu généré
-            menu_actuel = menus[0]
-            st.markdown(menu_actuel['contenu'])
-            
-            st.divider()
-            if st.button("🗑️ Semaine terminée : Effacer ce menu", type="primary"):
-                # On nettoie la base de données
-                supabase.table("menu_semaine").delete().eq("id", menu_actuel['id']).execute()
-                # On vide aussi l'historique du chat pour repartir à zéro
-                st.session_state.messages = []
-                st.success("Menu archivé ! Tu peux en générer un nouveau.")
-                st.rerun()
-    except Exception as e:
-        st.error(f"Erreur de lecture du menu : {e}")
+    st.write("### 🍽️ Repas de la semaine")
+    repas_db = supabase.table("programme_repas").select("*").order("id").execute().data
+    
+    if not repas_db:
+        st.info("Aucun repas planifié pour le moment. Demande un menu à l'Assistant !")
+    else:
+        for repas in repas_db:
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                if repas['fait']:
+                    st.write(f"~~**{repas['titre']}**~~ *(Cuisiné)*")
+                else:
+                    st.write(f"**{repas['titre']}**")
+            with col2:
+                if not repas['fait']:
+                    if st.button("🍽️ Cuisiné !", key=f"repas_{repas['id']}"):
+                        # Déstockage dynamique
+                        ingredients = json.loads(repas['ingredients_consommes'])
+                        inventaire = supabase.table("inventaire").select("*").execute().data
+                        
+                        for ing in ingredients:
+                            nom_ing = ing['nom'].strip().lower()
+                            qte_a_retirer = float(ing['quantite'])
+                            
+                            for item in inventaire:
+                                if item['nom'].strip().lower() == nom_ing:
+                                    nouvelle_qte = max(0.0, float(item['quantite']) - qte_a_retirer)
+                                    if nouvelle_qte == 0:
+                                        supabase.table("inventaire").delete().eq("id", item['id']).execute()
+                                    else:
+                                        supabase.table("inventaire").update({"quantite": nouvelle_qte}).eq("id", item['id']).execute()
+                        
+                        # Validation du plat
+                        supabase.table("programme_repas").update({"fait": True}).eq("id", repas['id']).execute()
+                        st.success(f"{repas['titre']} validé ! Garde-Manger mis à jour.")
+                        st.rerun()
+
+    st.divider()
+    
+    st.write("### 📜 Détail complet du menu")
+    res = supabase.table("menu_semaine").select("contenu").order("created_at", desc=True).limit(1).execute()
+    if res.data:
+        st.markdown(res.data[0]["contenu"])
+    else:
+        st.info("Aucun menu sauvegardé.")
