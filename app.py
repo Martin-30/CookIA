@@ -212,7 +212,7 @@ elif st.session_state.page_actuelle == "👨‍🍳 Assistant IA":
                         data_extraite = json.loads(match_json.group(1))
                         # On cible spécifiquement la liste contenue dans "courses"
                         st.session_state.courses_proposees = data_extraite.get("courses", [])
-                        st.session_state.texte_proposition_ia = texte_propre
+                        st.session_state.texte_proposition_ia = texte_reponse
 
                     # On vide le prompt en attente et on recharge la page pour tout afficher proprement
                     st.session_state.prompt_en_attente = None
@@ -362,7 +362,7 @@ elif st.session_state.page_actuelle == "🛒 Courses":
 # ==========================================
 # PAGE 4 : MENU DE LA SEMAINE
 # ==========================================
-elif st.session_state.page_actuelle == "📅 Menu":
+elif st.session_state.page_actuelle == "📅 Menu de la semaine":
     st.subheader("📅 Programme & Validation des Repas")
     
     st.write("### 🍽️ Repas de la semaine")
